@@ -13,10 +13,12 @@ const requiredEnvVars: string[] = [
   "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET",
   "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID",
   "NEXT_PUBLIC_FIREBASE_APP_ID",
-  // NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID is optional, so not listed here as strictly required for core functionality
 ];
 
-let firebaseConfig: {
+// NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID is optional
+// const optionalEnvVars: string[] = ["NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID"]; // Not currently used for a specific check but good to list
+
+type FirebaseConfig = {
   apiKey?: string;
   authDomain?: string;
   projectId?: string;
@@ -24,69 +26,79 @@ let firebaseConfig: {
   messagingSenderId?: string;
   appId?: string;
   measurementId?: string;
-} = {};
+};
 
-if (typeof window === "undefined") {
-  // Server-side, check environment variables
-  const missingEnvVars = requiredEnvVars.filter(envVar => !process.env[envVar]);
+const envVarToConfigKeyMap: { [key: string]: keyof FirebaseConfig } = {
+  "NEXT_PUBLIC_FIREBASE_API_KEY": "apiKey",
+  "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "authDomain",
+  "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "projectId",
+  "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET": "storageBucket",
+  "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "messagingSenderId",
+  "NEXT_PUBLIC_FIREBASE_APP_ID": "appId",
+  "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "measurementId",
+};
 
-  if (missingEnvVars.length > 0) {
-    // Log the error on the server for easier debugging during build or server start
-    console.error(
-      `Firebase configuration error: The following environment variables are missing or undefined: ${missingEnvVars.join(", ")}. Please ensure they are set in your .env.local file or environment.`
-    );
-    // We'll let the client-side check throw the visible error, or handle this more gracefully if needed.
-    // For now, proceed with potentially undefined config to allow build to pass, client will handle error.
-  }
-    firebaseConfig = {
-        apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-        authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-        projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-        storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-        appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-        measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Optional
-    };
+// Directly construct firebaseConfig using process.env
+const firebaseConfig: FirebaseConfig = {
+  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
+  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
+  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
+  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+};
+if (process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID) {
+  firebaseConfig.measurementId = process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID;
+}
 
-} else {
-  // Client-side, directly use public env vars (Next.js makes these available)
-  firebaseConfig = {
-    apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-    authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-    storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-    messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-    appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
-    measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID, // Optional
-  };
+// --- Enhanced Configuration Validation ---
 
-  const clientSideMissingEnvVars = requiredEnvVars.filter(envVar => !firebaseConfig[envVar as keyof typeof firebaseConfig]);
-   if (clientSideMissingEnvVars.length > 0) {
-    throw new Error(
-      `Firebase configuration error: The following environment variables are missing or undefined: ${clientSideMissingEnvVars.join(", ")}. Please ensure they are set in your .env.local file and the Next.js build process has access to them.`
-    );
-  }
+// 1. Check for common placeholder patterns in the API key.
+const apiKey = firebaseConfig.apiKey;
+if (apiKey && (
+    apiKey.startsWith("YOUR_") || 
+    apiKey.startsWith("AIzaSy") === false || // Valid keys start with AIzaSy
+    apiKey.includes("XXXX") || 
+    apiKey.length < 20) // Basic length check, typical keys are longer
+   ) {
+    // More specific check for "AIzaSy..." but allowing for test/emulator keys if they differ.
+    // For this application, we assume standard Firebase API keys.
+    if (apiKey.startsWith("YOUR_") || apiKey.includes("XXXX") || apiKey.length < 20 || (apiKey !== "firebase-emulator-api-key" && !apiKey.startsWith("AIzaSy"))) {
+         const placeholderErrorMessage = `Firebase Configuration Error: The API key ('${apiKey}') appears to be a placeholder or is invalid. Please provide a valid Firebase API key in your .env.local file for NEXT_PUBLIC_FIREBASE_API_KEY. Valid keys typically start with 'AIzaSy'.`;
+        console.error(placeholderErrorMessage);
+        throw new Error(placeholderErrorMessage);
+    }
 }
 
 
+// 2. Check for missing or empty *required* environment variables.
+const missingConfigKeys: string[] = [];
+for (const envVar of requiredEnvVars) {
+  const configKey = envVarToConfigKeyMap[envVar];
+  if (!firebaseConfig[configKey]) { // Checks for undefined, null, or empty string
+    missingConfigKeys.push(envVar);
+  }
+}
+
+if (missingConfigKeys.length > 0) {
+  const errorMessage = `Firebase Configuration Error: The following environment variables are missing or undefined: ${missingConfigKeys.join(", ")}. Please ensure they are set in your .env.local file and the Next.js build process has access to them (prefixed with NEXT_PUBLIC_).`;
+  console.error(errorMessage);
+  throw new Error(errorMessage);
+}
+
+// --- End of Enhanced Configuration Validation ---
+
+// Initialize Firebase
 let app: FirebaseApp;
 if (!getApps().length) {
-  // Check if all required config values are present before initializing
-  const allRequiredValuesPresent = requiredEnvVars.every(key => !!firebaseConfig[key as keyof typeof firebaseConfig]);
-  if (!allRequiredValuesPresent) {
-      // This check is more for robustness, the earlier checks should catch this.
-      // If running on client, the error would have been thrown already.
-      // If on server, it would have logged.
-      // This specific error might not be directly visible to the user if on server, but important for logs.
-      const errorMessage = `Firebase initialization failed: One or more required configuration values are missing. Check your .env.local file and ensure variables like NEXT_PUBLIC_FIREBASE_API_KEY are correctly set. Missing: ${requiredEnvVars.filter(key => !firebaseConfig[key as keyof typeof firebaseConfig]).join(', ')}`;
-      console.error(errorMessage);
-      // Avoid throwing here on server-side during module load if critical vars are missing to prevent build failures,
-      // but AuthProvider will fail later.
-      if (typeof window !== "undefined") {
-          throw new Error(errorMessage);
-      }
+  try {
+    app = initializeApp(firebaseConfig);
+  } catch (error: any) {
+    console.error("Critical Firebase Initialization Error:", error.message);
+    // Re-throw a more generic error if initializeApp itself fails for other reasons
+    // (though config validation should catch most issues).
+    throw new Error(`Failed to initialize Firebase: ${error.message}. Ensure your Firebase configuration is correct.`);
   }
-  app = initializeApp(firebaseConfig);
 } else {
   app = getApp();
 }
@@ -101,5 +113,13 @@ export { app, auth, db };
 // 2. Add a Web App to your project and copy the firebaseConfig.
 // 3. Enable Email/Password sign-in method in Firebase Authentication > Sign-in method.
 // 4. Set up Firestore database in Firebase console.
-// 5. Create a .env.local file in your project root and add your Firebase config as shown in the .env.local example.
+// 5. Create a .env.local file in your project root and add your Firebase config.
+//    Example content for .env.local:
+//    NEXT_PUBLIC_FIREBASE_API_KEY="YOUR_VALID_API_KEY"
+//    NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="YOUR_PROJECT_ID.firebaseapp.com"
+//    NEXT_PUBLIC_FIREBASE_PROJECT_ID="YOUR_PROJECT_ID"
+//    NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="YOUR_PROJECT_ID.appspot.com"
+//    NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="YOUR_SENDER_ID"
+//    NEXT_PUBLIC_FIREBASE_APP_ID="YOUR_APP_ID"
+//    NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID="YOUR_MEASUREMENT_ID" # Optional
 // 6. Restart your Next.js development server after creating/modifying .env.local.
